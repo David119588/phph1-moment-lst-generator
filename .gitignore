@@ -1,0 +1,32 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# PyCharm settings
+.idea/
+
+# Data outputs
+*.pkl
+*.csv
+examples_pkl/
+phph1_dataset/
+phph1_dataset_test/
+phph1_dataset_medium/
+
+# Large numerical files
+*.npy
+*.npz
+*.h5
+*.hdf5
+
+# Logs
+*.log
+*.out
+*.err
