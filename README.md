@@ -19,6 +19,33 @@ For each sampled PH/PH/1 queue, the code saves:
 python generate_phph1_dataset.py --num-examples 10 --arrival-size 20 --service-size 10 --k-list 1,3,5,7 --output-dir C:\phph1_dataset_medium --resume 0
 ```
 
+## Generate PH/PH/1 log-moment PKLs
+
+The single-example generator can also create a clean folder of random PH/PH/1
+examples. By default it writes to `C:\phph1`, creates `1000` PKLs, samples
+arrival/service PH sizes that add to `100`, and covers SCV bands up to `20`.
+
+```bash
+python generate_phph1_sojourn_moments.py --clean-output 1
+```
+
+Each PKL stores the arrival PH, service PH, sojourn ME representation, SCV
+metadata, and log moment arrays.
+
+## Plot SCV and PH-size graphs
+
+```bash
+python plot_phph1_scv_histograms.py --output-dir C:\Users\osamb\PycharmProjects\PythonProject5
+python plot_ph_size_histograms.py --output-dir C:\Users\osamb\PycharmProjects\PythonProject5
+```
+
+The plot scripts create:
+
+- `scv_histograms.png`
+- `skewness_vs_scv.png`
+- `kurtosis_vs_scv.png`
+- `ph_size_histograms.png`
+
 ## Check outputs
 
 ```bash
