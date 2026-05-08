@@ -29,6 +29,12 @@ arrival/service PH sizes that add to `100`, and covers SCV bands up to `20`.
 python generate_phph1_sojourn_moments.py --clean-output 1
 ```
 
+On a Linux server, use a Linux output path:
+
+```bash
+python generate_phph1_sojourn_moments.py --output-dir /scratch200/davidfine/phph1_data --clean-output 1
+```
+
 Each PKL stores the arrival PH, service PH, sojourn ME representation, SCV
 metadata, and log moment arrays.
 
@@ -95,4 +101,19 @@ It contains:
 
 The code requires BuTools.
 
-If BuTools is not installed globally, set the `BUTOOLS_PATH` variable inside `generate_phph1_dataset.py`.
+If BuTools is not installed globally, set the `BUTOOLS_PATH` environment variable.
+For example, if the BuTools `Python` folder is at `/scratch200/davidfine/butools2/Python`:
+
+```bash
+export BUTOOLS_PATH=/scratch200/davidfine/butools2/Python
+python -c "import sys; sys.path.append('$BUTOOLS_PATH'); import butools; print('BuTools OK')"
+```
+
+Then run the generator from the cloned repo:
+
+```bash
+cd /scratch200/davidfine/phph1
+python generate_phph1_sojourn_moments.py --output-dir /scratch200/davidfine/phph1_data --clean-output 1
+python plot_phph1_scv_histograms.py --input-dir /scratch200/davidfine/phph1_data --output-dir /scratch200/davidfine/phph1
+python plot_ph_size_histograms.py --input-dir /scratch200/davidfine/phph1_data --output-dir /scratch200/davidfine/phph1
+```

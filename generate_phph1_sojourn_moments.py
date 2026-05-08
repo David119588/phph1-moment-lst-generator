@@ -26,10 +26,39 @@ from pathlib import Path
 import numpy as np
 
 
-BUTOOLS_PATH = r"C:\Users\osamb\Downloads\butools2 (2)\butools2\Python"
+def add_butools_paths():
+    """
+    Add BuTools search paths without hard-coding one user's machine.
 
-if BUTOOLS_PATH is not None and BUTOOLS_PATH not in sys.path:
-    sys.path.append(BUTOOLS_PATH)
+    On Linux clusters, set for example:
+        export BUTOOLS_PATH=/scratch200/davidfine/butools2/Python
+    """
+    candidates = []
+    env_path = os.environ.get("BUTOOLS_PATH")
+    if env_path:
+        candidates.append(Path(env_path))
+
+    here = Path(__file__).resolve().parent
+    candidates.extend(
+        [
+            here / "butools" / "Python",
+            here / "butools2" / "Python",
+            here / "butools2" / "butools2" / "Python",
+            here.parent / "butools" / "Python",
+            here.parent / "butools2" / "Python",
+            here.parent / "butools2" / "butools2" / "Python",
+            Path(r"C:\Users\osamb\Downloads\butools2 (2)\butools2\Python"),
+        ]
+    )
+
+    for candidate in candidates:
+        if candidate.exists():
+            candidate_text = str(candidate)
+            if candidate_text not in sys.path:
+                sys.path.append(candidate_text)
+
+
+add_butools_paths()
 
 try:
     import butools
@@ -40,6 +69,8 @@ try:
 except Exception as e:
     raise ImportError(
         "Could not import BuTools. Install BuTools or set BUTOOLS_PATH correctly.\n"
+        "Linux example:\n"
+        "  export BUTOOLS_PATH=/scratch200/davidfine/butools2/Python\n"
         f"Original error: {type(e).__name__}: {e}"
     )
 

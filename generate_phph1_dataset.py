@@ -26,16 +26,38 @@ except NameError:
 
 # ------------------------------------------------------------
 # OPTIONAL:
-# If BuTools is not installed globally, put your BuTools path here.
-# Example:
-# BUTOOLS_PATH = r"C:\Users\osamb\Downloads\butools2\Python"
+# If BuTools is not installed globally, set BUTOOLS_PATH.
+# Linux example:
+# export BUTOOLS_PATH=/scratch200/davidfine/butools2/Python
 # ------------------------------------------------------------
 
-BUTOOLS_PATH = r"C:\Users\osamb\Downloads\butools2 (2)\butools2\Python"
+def add_butools_paths():
+    candidates = []
+    env_path = os.environ.get("BUTOOLS_PATH")
+    if env_path:
+        candidates.append(Path(env_path))
 
-if BUTOOLS_PATH is not None:
-    if BUTOOLS_PATH not in sys.path:
-        sys.path.append(BUTOOLS_PATH)
+    here = Path(__file__).resolve().parent
+    candidates.extend(
+        [
+            here / "butools" / "Python",
+            here / "butools2" / "Python",
+            here / "butools2" / "butools2" / "Python",
+            here.parent / "butools" / "Python",
+            here.parent / "butools2" / "Python",
+            here.parent / "butools2" / "butools2" / "Python",
+            Path(r"C:\Users\osamb\Downloads\butools2 (2)\butools2\Python"),
+        ]
+    )
+
+    for candidate in candidates:
+        if candidate.exists():
+            candidate_text = str(candidate)
+            if candidate_text not in sys.path:
+                sys.path.append(candidate_text)
+
+
+add_butools_paths()
 
 # ------------------------------------------------------------
 # Import BuTools
@@ -55,6 +77,8 @@ except Exception as e:
     raise ImportError(
         "Could not import BuTools. "
         "Install BuTools or set BUTOOLS_PATH correctly.\n"
+        "Linux example:\n"
+        "  export BUTOOLS_PATH=/scratch200/davidfine/butools2/Python\n"
         f"Original error: {type(e).__name__}: {e}"
     )
 # %%
