@@ -25,6 +25,11 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except AttributeError:
+    pass
+
 
 def add_butools_paths():
     """
@@ -138,6 +143,12 @@ def parse_args():
         type=int,
         default=0,
         help="Use 1 to delete old PKL/CSV/PNG files from --output-dir before generating.",
+    )
+    parser.add_argument(
+        "--resume",
+        type=int,
+        default=1,
+        help="Use 1 to skip example IDs whose PKL already exists in --output-dir.",
     )
     parser.add_argument(
         "--filename-prefix",
@@ -796,6 +807,16 @@ def clean_output_dir(output_dir):
             path.unlink()
 
 
+def existing_example_ids(output_dir):
+    existing = set()
+    pattern = re.compile(r"_ex_(\d+)\.pkl$")
+    for path in Path(output_dir).glob("*.pkl"):
+        match = pattern.search(path.name)
+        if match is not None:
+            existing.add(int(match.group(1)))
+    return existing
+
+
 def main():
     args = parse_args()
     families = parse_families(args.families)
@@ -814,14 +835,25 @@ def main():
     if args.clean_output:
         clean_output_dir(output_dir)
 
+    existing_ids = existing_example_ids(output_dir) if args.resume else set()
+    if existing_ids:
+        print(
+            f"Resume enabled: found {len(existing_ids)} existing PKLs. "
+            "Existing example IDs will be skipped."
+        )
+
     manifest_rows = []
     total_start = time.perf_counter()
     for example_id in range(args.num_examples):
         visible_id = example_id + 1
         example_label = f"example {visible_id}/{args.num_examples}"
         start = time.perf_counter()
-        print(f"Starting {example_label}...")
         output_example_id = None if args.num_examples == 1 else example_id
+        if output_example_id is not None and output_example_id in existing_ids:
+            print(f"Skipping {example_label}: PKL already exists.")
+            continue
+
+        print(f"Starting {example_label}...")
         try:
             row = generate_example(
                 args,
