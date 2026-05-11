@@ -124,7 +124,25 @@ def parse_args():
         "--service-mean",
         type=float,
         default=0.7,
-        help="Mean service time. Arrival mean is fixed to 1, so this is also rho.",
+        help="Fixed service mean when --random-service-mean is 0.",
+    )
+    parser.add_argument(
+        "--random-service-mean",
+        type=int,
+        default=1,
+        help="Use 1 to sample service mean uniformly between --service-mean-min and --service-mean-max.",
+    )
+    parser.add_argument(
+        "--service-mean-min",
+        type=float,
+        default=0.3,
+        help="Minimum sampled service mean when --random-service-mean is 1.",
+    )
+    parser.add_argument(
+        "--service-mean-max",
+        type=float,
+        default=0.99,
+        help="Maximum sampled service mean when --random-service-mean is 1.",
     )
     parser.add_argument(
         "--service-scv",
@@ -643,11 +661,28 @@ def choose_ph_sizes(args, rng):
     return arrival_size, service_size
 
 
+def choose_service_mean(args, rng):
+    if not args.random_service_mean:
+        return float(args.service_mean)
+
+    service_mean_min = float(args.service_mean_min)
+    service_mean_max = float(args.service_mean_max)
+    if service_mean_min <= 0.0:
+        raise ValueError("--service-mean-min must be positive.")
+    if service_mean_max >= 1.0:
+        raise ValueError("--service-mean-max must be smaller than 1.0.")
+    if service_mean_min > service_mean_max:
+        raise ValueError("--service-mean-min must be <= --service-mean-max.")
+
+    return float(rng.uniform(service_mean_min, service_mean_max))
+
+
 def generate_example(args, output_dir, rng, families, example_id=None):
     family_index = 0 if example_id is None else example_id
     arrival_family = families[family_index % len(families)]
     service_family = families[(family_index + 1) % len(families)]
     arrival_size, service_size = choose_ph_sizes(args, rng)
+    target_service_mean = choose_service_mean(args, rng)
     arrival_scv_min, arrival_scv_max = scv_band_for_example(
         family_index,
         args.arrival_scv_min,
@@ -673,7 +708,7 @@ def generate_example(args, output_dir, rng, families, example_id=None):
     service_alpha, service_t, service_scv, service_used_fallback = sample_ph_in_scv_range(
         service_family,
         service_size,
-        target_mean=args.service_mean,
+        target_mean=target_service_mean,
         scv_min=service_scv_min,
         scv_max=service_scv_max,
         rng=rng,
@@ -737,6 +772,7 @@ def generate_example(args, output_dir, rng, families, example_id=None):
             "arrival_scv_band_min": arrival_scv_min,
             "arrival_scv_band_max": arrival_scv_max,
             "service_mean": service_mean,
+            "target_service_mean": target_service_mean,
             "service_scv": service_scv,
             "service_scv_band_min": service_scv_min,
             "service_scv_band_max": service_scv_max,
@@ -755,6 +791,7 @@ def generate_example(args, output_dir, rng, families, example_id=None):
     print("Moment shapes:", log_input_moments.shape, log_sojourn_moments.shape)
     print("Inter-arrival mean:", ph_mean(arrival_alpha, arrival_t))
     print("Inter-arrival SCV:", arrival_scv)
+    print("Target service mean:", target_service_mean)
     print("Service mean:", service_mean)
     print("Service SCV:", service_scv)
     print("Sojourn ME order:", sojourn_t.shape[0])
@@ -775,6 +812,7 @@ def generate_example(args, output_dir, rng, families, example_id=None):
         "arrival_scv_band_min": arrival_scv_min,
         "arrival_scv_band_max": arrival_scv_max,
         "service_mean": service_mean,
+        "target_service_mean": target_service_mean,
         "service_scv": service_scv,
         "service_scv_band_min": service_scv_min,
         "service_scv_band_max": service_scv_max,
@@ -825,10 +863,17 @@ def main():
     if args.num_examples < 1:
         raise ValueError("--num-examples must be at least 1.")
 
-    if args.service_mean >= 1.0:
+    if not args.random_service_mean and args.service_mean >= 1.0:
         raise ValueError(
             "The script fixes E[inter-arrival] = 1, so --service-mean must be < 1."
         )
+    if args.random_service_mean:
+        if args.service_mean_min <= 0.0:
+            raise ValueError("--service-mean-min must be positive.")
+        if args.service_mean_max >= 1.0:
+            raise ValueError("--service-mean-max must be < 1.")
+        if args.service_mean_min > args.service_mean_max:
+            raise ValueError("--service-mean-min must be <= --service-mean-max.")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

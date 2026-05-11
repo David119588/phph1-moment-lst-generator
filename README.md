@@ -23,7 +23,8 @@ python generate_phph1_dataset.py --num-examples 10 --arrival-size 20 --service-s
 
 The single-example generator can also create a clean folder of random PH/PH/1
 examples. By default it writes to `C:\phph1`, creates `1000` PKLs, samples
-arrival/service PH sizes that add to `100`, and covers SCV bands up to `20`.
+arrival/service PH sizes that add to `100`, samples service mean uniformly from
+`0.3` to `0.99`, and covers SCV bands up to `20`.
 
 ```bash
 python generate_phph1_sojourn_moments.py --clean-output 1
