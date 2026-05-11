@@ -36,6 +36,41 @@ On a Linux server, use a Linux output path:
 python generate_phph1_sojourn_moments.py --output-dir /scratch200/davidfine/phph1_data --clean-output 1
 ```
 
+For SLURM, use an array job when you want many independent jobs. This example
+submits `1000` SLURM tasks, and each task creates `1000` PKLs. The task ID is
+used as an offset, so task `0` writes examples `0..999`, task `1` writes
+examples `1000..1999`, and so on.
+
+```bash
+cat > run_phph1_array.sbatch <<'EOF'
+#!/bin/bash
+#SBATCH --job-name=phph1
+#SBATCH --partition=power-general-shared-pool
+#SBATCH --array=0-999
+#SBATCH --output=/scratch200/davidfine/phph1/phph1_%A_%a.out
+#SBATCH --error=/scratch200/davidfine/phph1/phph1_%A_%a.err
+#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+
+cd /scratch200/davidfine/phph1
+export BUTOOLS_PATH=/scratch200/davidfine/butools2/Python
+
+python -u generate_phph1_sojourn_moments.py \
+  --output-dir /scratch200/davidfine/phph1_data \
+  --num-examples 1000 \
+  --resume 1 \
+  --random-service-mean 1 \
+  --service-mean-min 0.3 \
+  --service-mean-max 0.99
+EOF
+
+sbatch run_phph1_array.sbatch
+```
+
+Do not use `--clean-output 1` inside an array job, because every task shares the
+same output folder.
+
 Each PKL stores the arrival PH, service PH, sojourn ME representation, SCV
 metadata, and log moment arrays.
 
@@ -114,7 +149,7 @@ Then run the generator from the cloned repo:
 
 ```bash
 cd /scratch200/davidfine/phph1
-python generate_phph1_sojourn_moments.py --output-dir /scratch200/davidfine/phph1_data --clean-output 1
+python generate_phph1_sojourn_moments.py --output-dir /scratch200/davidfine/phph1_data --num-examples 1000 --resume 1
 python plot_phph1_scv_histograms.py --input-dir /scratch200/davidfine/phph1_data --output-dir /scratch200/davidfine/phph1
 python plot_ph_size_histograms.py --input-dir /scratch200/davidfine/phph1_data --output-dir /scratch200/davidfine/phph1
 ```

@@ -178,7 +178,25 @@ def parse_args():
         "--num-examples",
         type=int,
         default=1000,
-        help="Number of examples to generate. Prints elapsed time for each example.",
+        help="Number of examples to generate in this process. Prints elapsed time for each example.",
+    )
+    parser.add_argument(
+        "--job-index",
+        type=int,
+        default=None,
+        help=(
+            "Index of this batch/array job. If omitted, uses SLURM_ARRAY_TASK_ID "
+            "when available, otherwise 0."
+        ),
+    )
+    parser.add_argument(
+        "--example-start",
+        type=int,
+        default=None,
+        help=(
+            "First global example ID for this process. If omitted, uses "
+            "--job-index * --num-examples."
+        ),
     )
     parser.add_argument(
         "--display-pkl",
@@ -822,11 +840,11 @@ def generate_example(args, output_dir, rng, families, example_id=None):
     }
 
 
-def write_manifest(output_dir, rows):
+def write_manifest(output_dir, rows, suffix=""):
     if not rows:
         return None
 
-    manifest_path = Path(output_dir) / "phph1_examples_manifest.csv"
+    manifest_path = Path(output_dir) / f"phph1_examples_manifest{suffix}.csv"
     with open(manifest_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
@@ -855,13 +873,41 @@ def existing_example_ids(output_dir):
     return existing
 
 
+def resolved_job_index(args):
+    if args.job_index is not None:
+        return args.job_index
+
+    slurm_task_id = os.environ.get("SLURM_ARRAY_TASK_ID")
+    if slurm_task_id is None:
+        return 0
+
+    try:
+        return int(slurm_task_id)
+    except ValueError as exc:
+        raise ValueError(f"Invalid SLURM_ARRAY_TASK_ID: {slurm_task_id!r}") from exc
+
+
+def example_rng(seed, example_id):
+    if example_id is None:
+        return np.random.default_rng(seed)
+    return np.random.default_rng(np.random.SeedSequence([seed, example_id]))
+
+
 def main():
     args = parse_args()
     families = parse_families(args.families)
-    rng = np.random.default_rng(args.seed)
 
     if args.num_examples < 1:
         raise ValueError("--num-examples must be at least 1.")
+    job_index = resolved_job_index(args)
+    if job_index < 0:
+        raise ValueError("--job-index must be >= 0.")
+    if args.example_start is None:
+        first_example_id = job_index * args.num_examples
+    else:
+        first_example_id = args.example_start
+    if first_example_id < 0:
+        raise ValueError("--example-start must be >= 0.")
 
     if not args.random_service_mean and args.service_mean >= 1.0:
         raise ValueError(
@@ -886,14 +932,23 @@ def main():
             f"Resume enabled: found {len(existing_ids)} existing PKLs. "
             "Existing example IDs will be skipped."
         )
+    print("Job index:", job_index)
+    print("Examples in this job:", args.num_examples)
+    print("First global example ID:", first_example_id)
+    print("Last global example ID:", first_example_id + args.num_examples - 1)
 
     manifest_rows = []
     total_start = time.perf_counter()
-    for example_id in range(args.num_examples):
-        visible_id = example_id + 1
-        example_label = f"example {visible_id}/{args.num_examples}"
+    use_numbered_examples = args.num_examples != 1 or first_example_id != 0
+    for local_example_id in range(args.num_examples):
+        visible_id = local_example_id + 1
+        global_example_id = first_example_id + local_example_id
+        example_label = (
+            f"example {visible_id}/{args.num_examples} "
+            f"(global {global_example_id})"
+        )
         start = time.perf_counter()
-        output_example_id = None if args.num_examples == 1 else example_id
+        output_example_id = global_example_id if use_numbered_examples else None
         if output_example_id is not None and output_example_id in existing_ids:
             print(f"Skipping {example_label}: PKL already exists.")
             continue
@@ -903,7 +958,7 @@ def main():
             row = generate_example(
                 args,
                 output_dir,
-                rng,
+                example_rng(args.seed, output_example_id),
                 families,
                 example_id=output_example_id,
             )
@@ -912,7 +967,8 @@ def main():
             elapsed = time.perf_counter() - start
             print(f"Time for {example_label}: {elapsed:.3f} seconds")
 
-    manifest_path = write_manifest(output_dir, manifest_rows)
+    manifest_suffix = f"_job_{job_index:04d}_ex_{first_example_id:06d}_{first_example_id + args.num_examples - 1:06d}"
+    manifest_path = write_manifest(output_dir, manifest_rows, suffix=manifest_suffix)
     if manifest_path is not None:
         print("Saved manifest:", manifest_path)
 
