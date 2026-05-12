@@ -1,0 +1,492 @@
+"""
+Sample MAP/PH/1 queues and compute sojourn-time moments.
+
+This script is intended for the "second queue" experiment where arrivals are a
+MAP instead of renewal PH. It samples a 2-state MMPP/MAP arrival process, samples
+a PH service-time distribution, computes the MAP/PH/1 sojourn-time ME
+representation with BuTools MAPMAP1, and saves:
+
+    - one PKL per example
+    - a manifest CSV
+    - summary plots
+
+The arrival mean is scaled to 1, so the sampled service mean is also the
+utilization rho. By default rho is sampled uniformly in [0.3, 0.99].
+"""
+
+import argparse
+import csv
+import math
+import os
+import pickle
+import re
+import sys
+import time
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def add_butools_paths():
+    candidates = []
+    env_path = os.environ.get("BUTOOLS_PATH")
+    if env_path:
+        candidates.append(Path(env_path))
+
+    here = Path(__file__).resolve().parent
+    candidates.extend(
+        [
+            here / "butools" / "Python",
+            here / "butools2" / "Python",
+            here.parent / "butools" / "Python",
+            here.parent / "butools2" / "Python",
+            Path(r"C:\Users\osamb\Downloads\butools2 (2)\butools2\Python"),
+        ]
+    )
+
+    for candidate in candidates:
+        if candidate.exists():
+            text = str(candidate)
+            if text not in sys.path:
+                sys.path.append(text)
+
+
+add_butools_paths()
+
+try:
+    import butools
+    from butools.queues import MAPMAP1
+
+    butools.verbose = False
+    butools.checkInput = False
+except Exception as exc:
+    raise ImportError(
+        "Could not import BuTools. Set BUTOOLS_PATH to the BuTools Python folder. "
+        f"Original error: {type(exc).__name__}: {exc}"
+    )
+
+
+FILENAME_RE = re.compile(r"_ex_(\d+)\.pkl$")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Sample MAP/PH/1 sojourn examples.")
+    parser.add_argument("--output-dir", type=Path, default=Path(r"C:\map_ph1_second_queue"))
+    parser.add_argument("--num-examples", type=int, default=1000)
+    parser.add_argument("--job-index", type=int, default=None)
+    parser.add_argument("--example-start", type=int, default=None)
+    parser.add_argument("--resume", type=int, default=1)
+    parser.add_argument("--clean-output", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=12345)
+    parser.add_argument("--service-size", type=int, default=20)
+    parser.add_argument("--service-mean-min", type=float, default=0.3)
+    parser.add_argument("--service-mean-max", type=float, default=0.99)
+    parser.add_argument("--service-scv-min", type=float, default=0.15)
+    parser.add_argument("--service-scv-max", type=float, default=20.0)
+    parser.add_argument("--map-rate-ratio-min", type=float, default=1.5)
+    parser.add_argument("--map-rate-ratio-max", type=float, default=20.0)
+    parser.add_argument("--map-switch-rate-min", type=float, default=0.02)
+    parser.add_argument("--map-switch-rate-max", type=float, default=3.0)
+    parser.add_argument("--num-moments", type=int, default=20)
+    parser.add_argument("--plot", type=int, default=1)
+    return parser.parse_args()
+
+
+def as_row(x):
+    x = np.asarray(x, dtype=float)
+    if x.ndim == 1:
+        x = x.reshape(1, -1)
+    return x
+
+
+def as_mat(x):
+    return np.asarray(x, dtype=float)
+
+
+def col_ones(n):
+    return np.ones((n, 1), dtype=float)
+
+
+def ph_moments(alpha, t_matrix, n_moms):
+    alpha = as_row(alpha)
+    t_matrix = as_mat(t_matrix)
+    inv_minus_t = np.linalg.inv(-t_matrix)
+    power = np.eye(t_matrix.shape[0])
+    ones = col_ones(t_matrix.shape[0])
+
+    moments = []
+    for k in range(1, n_moms + 1):
+        power = power @ inv_minus_t
+        moments.append(math.factorial(k) * float(alpha @ power @ ones))
+    return np.asarray(moments, dtype=float)
+
+
+def ph_mean(alpha, t_matrix):
+    return float(ph_moments(alpha, t_matrix, 1)[0])
+
+
+def ph_scv(alpha, t_matrix):
+    m1, m2 = ph_moments(alpha, t_matrix, 2)
+    return float((m2 - m1 * m1) / (m1 * m1))
+
+
+def scale_ph_to_mean(alpha, t_matrix, target_mean):
+    current_mean = ph_mean(alpha, t_matrix)
+    if current_mean <= 0 or not np.isfinite(current_mean):
+        raise ValueError(f"Bad PH mean: {current_mean}")
+    return as_row(alpha), as_mat(t_matrix) * (current_mean / target_mean)
+
+
+def random_hyperexponential_ph(size, target_mean, scv_min, scv_max, rng):
+    if size < 2:
+        raise ValueError("--service-size must be at least 2")
+
+    # Hyperexponential PH: alpha chooses the phase, T is diagonal.
+    for _ in range(10000):
+        weights = rng.dirichlet(np.ones(size))
+        rates = np.exp(rng.uniform(np.log(0.05), np.log(30.0), size))
+        alpha = weights.reshape(1, -1)
+        t_matrix = -np.diag(rates)
+        alpha, t_matrix = scale_ph_to_mean(alpha, t_matrix, target_mean)
+        scv = ph_scv(alpha, t_matrix)
+        if scv_min <= scv <= scv_max:
+            return alpha, t_matrix, scv
+
+    # Fallback: accept the last sampled PH rather than failing the whole job.
+    return alpha, t_matrix, scv
+
+
+def ph_to_renewal_map(alpha, t_matrix):
+    alpha = as_row(alpha)
+    t_matrix = as_mat(t_matrix)
+    exit_vec = (-t_matrix) @ col_ones(t_matrix.shape[0])
+    s0 = t_matrix.copy()
+    s1 = exit_vec @ alpha
+    return s0, s1
+
+
+def stationary_distribution(q):
+    n = q.shape[0]
+    a = q.T.copy()
+    b = np.zeros(n)
+    a[-1, :] = 1.0
+    b[-1] = 1.0
+    return np.linalg.solve(a, b).reshape(1, -1)
+
+
+def map_arrival_rate(d0, d1):
+    q = d0 + d1
+    pi = stationary_distribution(q)
+    return float(pi @ d1 @ col_ones(d0.shape[0]))
+
+
+def scale_map_to_mean(d0, d1, target_mean):
+    rate = map_arrival_rate(d0, d1)
+    target_rate = 1.0 / target_mean
+    scale = target_rate / rate
+    return d0 * scale, d1 * scale
+
+
+def sample_mMPP_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_max=20.0,
+                    switch_rate_min=0.02, switch_rate_max=3.0):
+    """
+    Sample a 2-state Markov-modulated Poisson process as a MAP.
+
+    D0 contains state transitions without arrivals and Poisson arrival rates on
+    the diagonal; D1 is diagonal with arrival rates.
+    """
+    low_rate = float(np.exp(rng.uniform(np.log(0.05), np.log(2.0))))
+    ratio = float(np.exp(rng.uniform(np.log(rate_ratio_min), np.log(rate_ratio_max))))
+    high_rate = low_rate * ratio
+    q01 = float(np.exp(rng.uniform(np.log(switch_rate_min), np.log(switch_rate_max))))
+    q10 = float(np.exp(rng.uniform(np.log(switch_rate_min), np.log(switch_rate_max))))
+
+    if rng.random() < 0.5:
+        lambdas = np.array([low_rate, high_rate], dtype=float)
+    else:
+        lambdas = np.array([high_rate, low_rate], dtype=float)
+
+    d1 = np.diag(lambdas)
+    d0 = np.array(
+        [
+            [-(q01 + lambdas[0]), q01],
+            [q10, -(q10 + lambdas[1])],
+        ],
+        dtype=float,
+    )
+    d0, d1 = scale_map_to_mean(d0, d1, target_mean)
+    return d0, d1
+
+
+def lag1_autocorrelation_from_map(d0, d1):
+    """
+    Estimate lag-1 autocorrelation from the embedded post-arrival phase chain.
+    """
+    n = d0.shape[0]
+    inv_minus_d0 = np.linalg.inv(-d0)
+    p = inv_minus_d0 @ d1
+    pi = stationary_distribution(p - np.eye(n))
+    mean_by_phase = inv_minus_d0 @ col_ones(n)
+    mean = float(pi @ mean_by_phase)
+    centered = mean_by_phase - mean
+    var = float(pi @ (centered * centered))
+    if var <= 0:
+        return 0.0
+    cov = float(pi @ (centered * (p @ centered)))
+    return cov / var
+
+
+def parse_mapmap1_st_distr_me_result(res):
+    if isinstance(res, tuple) and len(res) == 2:
+        return as_row(res[0]), as_mat(res[1])
+    if isinstance(res, list):
+        if len(res) == 2:
+            return as_row(res[0]), as_mat(res[1])
+        if len(res) == 1:
+            inner = res[0]
+            if isinstance(inner, (tuple, list)) and len(inner) == 2:
+                return as_row(inner[0]), as_mat(inner[1])
+    raise ValueError(f"Could not parse MAPMAP1 stDistrME result: {type(res)} {res}")
+
+
+def log_checked(values, label):
+    values = np.asarray(values, dtype=float)
+    if not np.all(np.isfinite(values)) or np.any(values <= 0):
+        raise ValueError(f"{label} moments must be positive and finite: {values}")
+    return np.log(values)
+
+
+def resolved_job_index(args):
+    if args.job_index is not None:
+        return args.job_index
+    task_id = os.environ.get("SLURM_ARRAY_TASK_ID")
+    return int(task_id) if task_id is not None else 0
+
+
+def existing_example_ids(output_dir):
+    existing = set()
+    for path in output_dir.glob("*.pkl"):
+        match = FILENAME_RE.search(path.name)
+        if match is not None:
+            existing.add(int(match.group(1)))
+    return existing
+
+
+def example_rng(seed, example_id):
+    return np.random.default_rng(np.random.SeedSequence([seed, example_id]))
+
+
+def build_output_path(output_dir, example_id, rho, autocorr):
+    return output_dir / (
+        f"map_ph1_queue2_rho_{rho:.6f}_corr_{autocorr:.6f}_ex_{example_id:08d}.pkl"
+    )
+
+
+def generate_example(args, example_id):
+    rng = example_rng(args.seed, example_id)
+    d0, d1 = sample_mMPP_map(
+        rng,
+        target_mean=1.0,
+        rate_ratio_min=args.map_rate_ratio_min,
+        rate_ratio_max=args.map_rate_ratio_max,
+        switch_rate_min=args.map_switch_rate_min,
+        switch_rate_max=args.map_switch_rate_max,
+    )
+
+    rho = float(rng.uniform(args.service_mean_min, args.service_mean_max))
+    service_alpha, service_t, service_scv = random_hyperexponential_ph(
+        args.service_size,
+        target_mean=rho,
+        scv_min=args.service_scv_min,
+        scv_max=args.service_scv_max,
+        rng=rng,
+    )
+    s0, s1 = ph_to_renewal_map(service_alpha, service_t)
+    beta, t_sojourn = parse_mapmap1_st_distr_me_result(
+        MAPMAP1(d0, d1, s0, s1, "stDistrME")
+    )
+
+    service_moments = ph_moments(service_alpha, service_t, 10)
+    sojourn_moments = ph_moments(beta, t_sojourn, args.num_moments)
+    autocorr = float(lag1_autocorrelation_from_map(d0, d1))
+
+    return {
+        "example_id": example_id,
+        "rho": rho,
+        "arrival_mean": 1.0,
+        "service_mean": ph_mean(service_alpha, service_t),
+        "service_scv": service_scv,
+        "map_lag1_autocorrelation": autocorr,
+        "D0": d0.astype(float),
+        "D1": d1.astype(float),
+        "service_alpha": service_alpha.astype(float),
+        "service_T": service_t.astype(float),
+        "sojourn_beta": beta.astype(float),
+        "sojourn_T": t_sojourn.astype(float),
+        "log_service_moments": log_checked(service_moments, "Service").astype(float),
+        "log_sojourn_moments": log_checked(sojourn_moments, "Sojourn").astype(float),
+        "sojourn_mean": float(sojourn_moments[0]),
+        "sojourn_order": int(t_sojourn.shape[0]),
+    }
+
+
+def clean_output_dir(output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for path in output_dir.iterdir():
+        if path.is_file() and path.suffix.lower() in {".pkl", ".csv", ".png"}:
+            path.unlink()
+
+
+def write_manifest(output_dir, rows, suffix):
+    if not rows:
+        return None
+    path = output_dir / f"map_ph1_manifest{suffix}.csv"
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def plot_summary(output_dir, rows):
+    if not rows:
+        return []
+
+    rho = np.asarray([row["rho"] for row in rows], dtype=float)
+    corr = np.asarray([row["map_lag1_autocorrelation"] for row in rows], dtype=float)
+    soj_mean = np.asarray([row["sojourn_mean"] for row in rows], dtype=float)
+    service_scv = np.asarray([row["service_scv"] for row in rows], dtype=float)
+
+    paths = []
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    axes[0].hist(rho, bins=40, color="#28666e", edgecolor="white")
+    axes[0].set_title("Sampled utilization")
+    axes[0].set_xlabel("rho")
+    axes[0].set_ylabel("count")
+    axes[1].hist(corr, bins=40, color="#b3532f", edgecolor="white")
+    axes[1].set_title("MAP lag-1 autocorrelation")
+    axes[1].set_xlabel("autocorrelation")
+    axes[2].hist(np.log(soj_mean), bins=40, color="#585858", edgecolor="white")
+    axes[2].set_title("Log sojourn mean")
+    axes[2].set_xlabel("log E[W]")
+    fig.tight_layout()
+    path = output_dir / "map_ph1_histograms.png"
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+    paths.append(path)
+
+    fig, axis = plt.subplots(figsize=(8, 5))
+    scatter = axis.scatter(rho, np.log(soj_mean), c=corr, s=14, alpha=0.75, cmap="viridis")
+    axis.set_title("MAP/PH/1 sojourn area")
+    axis.set_xlabel("utilization rho")
+    axis.set_ylabel("log sojourn mean")
+    colorbar = fig.colorbar(scatter, ax=axis)
+    colorbar.set_label("MAP lag-1 autocorrelation")
+    fig.tight_layout()
+    path = output_dir / "map_ph1_sojourn_area.png"
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+    paths.append(path)
+
+    fig, axis = plt.subplots(figsize=(8, 5))
+    scatter = axis.scatter(service_scv, np.log(soj_mean), c=rho, s=14, alpha=0.75, cmap="plasma")
+    axis.set_xscale("log")
+    axis.set_title("Service variability vs MAP/PH/1 sojourn")
+    axis.set_xlabel("service SCV")
+    axis.set_ylabel("log sojourn mean")
+    colorbar = fig.colorbar(scatter, ax=axis)
+    colorbar.set_label("rho")
+    fig.tight_layout()
+    path = output_dir / "map_ph1_service_scv_vs_sojourn.png"
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+    paths.append(path)
+
+    return paths
+
+
+def main():
+    args = parse_args()
+    if args.num_examples < 1:
+        raise ValueError("--num-examples must be at least 1")
+    if args.service_mean_min <= 0 or args.service_mean_max >= 1:
+        raise ValueError("Require 0 < service mean min/max < 1")
+    if args.service_mean_min > args.service_mean_max:
+        raise ValueError("--service-mean-min must be <= --service-mean-max")
+
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if args.clean_output:
+        clean_output_dir(output_dir)
+
+    job_index = resolved_job_index(args)
+    first_example = (
+        job_index * args.num_examples if args.example_start is None else args.example_start
+    )
+    existing = existing_example_ids(output_dir) if args.resume else set()
+
+    print("MAP/PH/1 second queue sampler")
+    print("Job index:", job_index)
+    print("Examples:", args.num_examples)
+    print("Global examples:", first_example, "to", first_example + args.num_examples - 1)
+    print("Output dir:", output_dir)
+    print("Service mean/rho range:", args.service_mean_min, args.service_mean_max)
+
+    rows = []
+    start_all = time.perf_counter()
+    for local_id in range(args.num_examples):
+        example_id = first_example + local_id
+        if example_id in existing:
+            print(f"Skipping existing example {example_id}")
+            continue
+
+        start = time.perf_counter()
+        payload = generate_example(args, example_id)
+        output_path = build_output_path(
+            output_dir,
+            example_id,
+            payload["rho"],
+            payload["map_lag1_autocorrelation"],
+        )
+        with open(output_path, "wb") as f:
+            pickle.dump(payload, f)
+
+        rows.append(
+            {
+                "example_id": example_id,
+                "path": str(output_path),
+                "rho": payload["rho"],
+                "service_mean": payload["service_mean"],
+                "service_scv": payload["service_scv"],
+                "map_lag1_autocorrelation": payload["map_lag1_autocorrelation"],
+                "sojourn_mean": payload["sojourn_mean"],
+                "sojourn_order": payload["sojourn_order"],
+            }
+        )
+        print(
+            f"Saved example {example_id}: rho={payload['rho']:.4f}, "
+            f"corr={payload['map_lag1_autocorrelation']:.4f}, "
+            f"E[W]={payload['sojourn_mean']:.4g}, "
+            f"time={time.perf_counter() - start:.3f}s"
+        )
+
+    suffix = f"_job_{job_index:04d}_ex_{first_example:08d}_{first_example + args.num_examples - 1:08d}"
+    manifest_path = write_manifest(output_dir, rows, suffix)
+    if manifest_path:
+        print("Saved manifest:", manifest_path)
+
+    if args.plot and rows:
+        for path in plot_summary(output_dir, rows):
+            print("Saved plot:", path)
+
+    print(f"Total time: {time.perf_counter() - start_all:.3f}s")
+
+
+if __name__ == "__main__":
+    main()

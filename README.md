@@ -74,6 +74,35 @@ same output folder.
 Each PKL stores the arrival PH, service PH, sojourn ME representation, SCV
 metadata, and log moment arrays.
 
+## Sample MAP/PH/1 second-queue sojourn data
+
+Use `sample_map_ph1_sojourn.py` when the second queue arrival process is a MAP.
+The script samples a 2-state MMPP/MAP arrival process, samples PH service times,
+and computes the MAP/PH/1 sojourn-time ME representation with BuTools
+`MAPMAP1`.
+
+Local/single-job example:
+
+```bash
+python sample_map_ph1_sojourn.py --output-dir C:\map_ph1_queue2 --num-examples 1000 --service-mean-min 0.3 --service-mean-max 0.99
+```
+
+SLURM array example:
+
+```bash
+sbatch run_map_ph1_queue2_1000x1000.sbatch
+```
+
+This submits `1000` array tasks with `1000` examples per task. The array limit
+`%100` means up to `100` tasks run in parallel. Outputs are written to
+`/scratch200/davidfine/map_ph1_queue2_data`.
+
+The script saves PKLs, per-job manifest CSV files, and these graphs:
+
+- `map_ph1_histograms.png`
+- `map_ph1_sojourn_area.png`
+- `map_ph1_service_scv_vs_sojourn.png`
+
 ## Plot SCV and PH-size graphs
 
 ```bash
@@ -87,6 +116,46 @@ The plot scripts create:
 - `skewness_vs_scv.png`
 - `kurtosis_vs_scv.png`
 - `ph_size_histograms.png`
+
+## Build interdeparture moment/autocorrelation dataset
+
+Use `build_interdeparture_dataset.py` to create a balanced pandas table from
+the departure PKLs. The table contains half queue-0 examples and half queue-1
+examples, with the first 10 log interdeparture moments and the first
+autocorrelation.
+
+First run, when `C:\DEPART_1` has not been extracted yet:
+
+```bash
+python build_interdeparture_dataset.py --extract --delete-empty --examples-per-queue 25000 --output-dir C:\Users\osamb\PycharmProjects\PythonProject5
+```
+
+Later runs, after both `C:\DEPART_0` and `C:\DEPART_1` already exist:
+
+```bash
+python build_interdeparture_dataset.py --delete-empty --examples-per-queue 25000 --output-dir C:\Users\osamb\PycharmProjects\PythonProject5
+```
+
+Outputs:
+
+- `interdeparture_balanced_dataset.csv`
+- `interdeparture_balanced_dataset.pkl`
+
+To describe the empirical distribution area after the dataset is created, run:
+
+```bash
+python analyze_interdeparture_area.py
+```
+
+This creates the folder `interdeparture_area_analysis` with summary CSV files
+and plots comparing the two queues:
+
+- `interdeparture_area_summary_by_queue.csv`
+- `interdeparture_area_correlation_matrix.csv`
+- `autocorrelation_by_queue.png`
+- `log_moment_histograms_by_queue.png`
+- `moment_autocorrelation_area.png`
+- `moment_area_m2_m3.png`
 
 ## Check outputs
 
