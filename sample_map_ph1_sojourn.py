@@ -115,6 +115,21 @@ def parse_args():
     parser.add_argument("--map-rate-ratio-max", type=float, default=20.0)
     parser.add_argument("--map-switch-rate-min", type=float, default=0.02)
     parser.add_argument("--map-switch-rate-max", type=float, default=3.0)
+    parser.add_argument(
+        "--map-corr-mode",
+        choices=("mixed", "positive", "negative"),
+        default="mixed",
+        help=(
+            "MAP autocorrelation family. positive uses an MMPP-like MAP, "
+            "negative uses an alternating-arrival MAP, and mixed samples both."
+        ),
+    )
+    parser.add_argument(
+        "--map-negative-prob",
+        type=float,
+        default=0.5,
+        help="Probability of sampling the negative-correlation MAP when --map-corr-mode mixed.",
+    )
     parser.add_argument("--num-moments", type=int, default=20)
     parser.add_argument("--plot", type=int, default=1)
     return parser.parse_args()
@@ -249,7 +264,85 @@ def sample_mMPP_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_max=20.
         dtype=float,
     )
     d0, d1 = scale_map_to_mean(d0, d1, target_mean)
-    return d0, d1
+    return d0, d1, "positive_mmpp"
+
+
+def sample_alternating_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_max=20.0,
+                           switch_rate_min=0.02, switch_rate_max=3.0):
+    """
+    Sample a 2-state MAP where arrivals tend to switch the hidden state.
+
+    This creates alternating short/long interarrival periods when the two state
+    rates differ, so the lag-1 interarrival autocorrelation can be negative.
+    """
+    low_rate = float(np.exp(rng.uniform(np.log(0.05), np.log(2.0))))
+    ratio = float(np.exp(rng.uniform(np.log(rate_ratio_min), np.log(rate_ratio_max))))
+    high_rate = low_rate * ratio
+
+    arrival_switch_01 = high_rate
+    arrival_switch_10 = low_rate
+    no_arrival_switch_01 = float(
+        np.exp(rng.uniform(np.log(switch_rate_min), np.log(switch_rate_max)))
+    )
+    no_arrival_switch_10 = float(
+        np.exp(rng.uniform(np.log(switch_rate_min), np.log(switch_rate_max)))
+    )
+
+    if rng.random() < 0.5:
+        d1 = np.array([[0.0, arrival_switch_01], [arrival_switch_10, 0.0]], dtype=float)
+    else:
+        d1 = np.array([[0.0, arrival_switch_10], [arrival_switch_01, 0.0]], dtype=float)
+
+    d0 = np.array(
+        [
+            [-(no_arrival_switch_01 + d1[0].sum()), no_arrival_switch_01],
+            [no_arrival_switch_10, -(no_arrival_switch_10 + d1[1].sum())],
+        ],
+        dtype=float,
+    )
+    d0, d1 = scale_map_to_mean(d0, d1, target_mean)
+    return d0, d1, "negative_alternating"
+
+
+def sample_map_arrival(args, rng):
+    if args.map_corr_mode == "positive":
+        return sample_mMPP_map(
+            rng,
+            target_mean=1.0,
+            rate_ratio_min=args.map_rate_ratio_min,
+            rate_ratio_max=args.map_rate_ratio_max,
+            switch_rate_min=args.map_switch_rate_min,
+            switch_rate_max=args.map_switch_rate_max,
+        )
+
+    if args.map_corr_mode == "negative":
+        return sample_alternating_map(
+            rng,
+            target_mean=1.0,
+            rate_ratio_min=args.map_rate_ratio_min,
+            rate_ratio_max=args.map_rate_ratio_max,
+            switch_rate_min=args.map_switch_rate_min,
+            switch_rate_max=args.map_switch_rate_max,
+        )
+
+    if rng.random() < args.map_negative_prob:
+        return sample_alternating_map(
+            rng,
+            target_mean=1.0,
+            rate_ratio_min=args.map_rate_ratio_min,
+            rate_ratio_max=args.map_rate_ratio_max,
+            switch_rate_min=args.map_switch_rate_min,
+            switch_rate_max=args.map_switch_rate_max,
+        )
+
+    return sample_mMPP_map(
+        rng,
+        target_mean=1.0,
+        rate_ratio_min=args.map_rate_ratio_min,
+        rate_ratio_max=args.map_rate_ratio_max,
+        switch_rate_min=args.map_switch_rate_min,
+        switch_rate_max=args.map_switch_rate_max,
+    )
 
 
 def lag1_autocorrelation_from_map(d0, d1):
@@ -318,14 +411,7 @@ def build_output_path(output_dir, example_id, rho, autocorr):
 
 def generate_example(args, example_id):
     rng = example_rng(args.seed, example_id)
-    d0, d1 = sample_mMPP_map(
-        rng,
-        target_mean=1.0,
-        rate_ratio_min=args.map_rate_ratio_min,
-        rate_ratio_max=args.map_rate_ratio_max,
-        switch_rate_min=args.map_switch_rate_min,
-        switch_rate_max=args.map_switch_rate_max,
-    )
+    d0, d1, map_type = sample_map_arrival(args, rng)
 
     rho = float(rng.uniform(args.service_mean_min, args.service_mean_max))
     service_size = choose_service_size(args, rng)
@@ -349,6 +435,7 @@ def generate_example(args, example_id):
         "example_id": example_id,
         "rho": rho,
         "arrival_mean": 1.0,
+        "map_type": map_type,
         "service_mean": ph_mean(service_alpha, service_t),
         "service_size": int(service_size),
         "service_scv": service_scv,
@@ -456,6 +543,8 @@ def main():
         raise ValueError("--service-size-min must be at least 2")
     if args.service_size_min > args.service_size_max:
         raise ValueError("--service-size-min must be <= --service-size-max")
+    if args.map_negative_prob < 0.0 or args.map_negative_prob > 1.0:
+        raise ValueError("--map-negative-prob must be between 0 and 1")
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -474,6 +563,8 @@ def main():
     print("Global examples:", first_example, "to", first_example + args.num_examples - 1)
     print("Output dir:", output_dir)
     print("Service mean/rho range:", args.service_mean_min, args.service_mean_max)
+    print("MAP correlation mode:", args.map_corr_mode)
+    print("MAP negative sampling probability:", args.map_negative_prob)
     if args.random_service_size:
         print("Random service PH size range:", args.service_size_min, args.service_size_max)
     else:
@@ -504,6 +595,7 @@ def main():
                 "example_id": example_id,
                 "path": str(output_path),
                 "rho": payload["rho"],
+                "map_type": payload["map_type"],
                 "service_mean": payload["service_mean"],
                 "service_size": payload["service_size"],
                 "service_scv": payload["service_scv"],
@@ -516,6 +608,7 @@ def main():
             f"Saved example {example_id}: rho={payload['rho']:.4f}, "
             f"service_size={payload['service_size']}, "
             f"service_scv={payload['service_scv']:.4f}, "
+            f"map_type={payload['map_type']}, "
             f"corr={payload['map_lag1_autocorrelation']:.4f}, "
             f"E[W]={payload['sojourn_mean']:.4g}, "
             f"time={time.perf_counter() - start:.3f}s"

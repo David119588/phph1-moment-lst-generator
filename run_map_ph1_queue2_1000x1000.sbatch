@@ -28,6 +28,7 @@ echo "Up to 100 tasks run in parallel."
 echo "Global example IDs: $((SLURM_ARRAY_TASK_ID * 1000))..$((SLURM_ARRAY_TASK_ID * 1000 + 999))"
 echo "Sampling service mean/utilization rho uniformly in [0.3, 0.99]."
 echo "Sampling service PH size uniformly from 2 to 100 and service SCV up to 20."
+echo "Sampling mixed MAP autocorrelation, including negative alternating MAPs."
 
 python -u sample_map_ph1_sojourn.py \
   --output-dir "$OUTPUT_DIR" \
@@ -40,4 +41,6 @@ python -u sample_map_ph1_sojourn.py \
   --service-size-max 100 \
   --service-scv-min 0.15 \
   --service-scv-max 20 \
+  --map-corr-mode mixed \
+  --map-negative-prob 0.5 \
   --plot 1
