@@ -27,6 +27,7 @@ echo "Each task generates 1000 examples."
 echo "Up to 100 tasks run in parallel."
 echo "Global example IDs: $((SLURM_ARRAY_TASK_ID * 1000))..$((SLURM_ARRAY_TASK_ID * 1000 + 999))"
 echo "Sampling service mean/utilization rho uniformly in [0.3, 0.99]."
+echo "Sampling service PH size uniformly from 2 to 100 and service SCV up to 20."
 
 python -u sample_map_ph1_sojourn.py \
   --output-dir "$OUTPUT_DIR" \
@@ -34,5 +35,9 @@ python -u sample_map_ph1_sojourn.py \
   --resume 1 \
   --service-mean-min 0.3 \
   --service-mean-max 0.99 \
-  --service-size 20 \
+  --random-service-size 1 \
+  --service-size-min 2 \
+  --service-size-max 100 \
+  --service-scv-min 0.15 \
+  --service-scv-max 20 \
   --plot 1

@@ -83,7 +83,30 @@ def parse_args():
     parser.add_argument("--resume", type=int, default=1)
     parser.add_argument("--clean-output", type=int, default=0)
     parser.add_argument("--seed", type=int, default=12345)
-    parser.add_argument("--service-size", type=int, default=20)
+    parser.add_argument(
+        "--service-size",
+        type=int,
+        default=20,
+        help="Fixed PH service size when --random-service-size is 0.",
+    )
+    parser.add_argument(
+        "--random-service-size",
+        type=int,
+        default=1,
+        help="Use 1 to sample the PH service size for each example.",
+    )
+    parser.add_argument(
+        "--service-size-min",
+        type=int,
+        default=2,
+        help="Minimum sampled PH service size when --random-service-size is 1.",
+    )
+    parser.add_argument(
+        "--service-size-max",
+        type=int,
+        default=100,
+        help="Maximum sampled PH service size when --random-service-size is 1.",
+    )
     parser.add_argument("--service-mean-min", type=float, default=0.3)
     parser.add_argument("--service-mean-max", type=float, default=0.99)
     parser.add_argument("--service-scv-min", type=float, default=0.15)
@@ -159,6 +182,12 @@ def random_hyperexponential_ph(size, target_mean, scv_min, scv_max, rng):
 
     # Fallback: accept the last sampled PH rather than failing the whole job.
     return alpha, t_matrix, scv
+
+
+def choose_service_size(args, rng):
+    if not args.random_service_size:
+        return int(args.service_size)
+    return int(rng.integers(args.service_size_min, args.service_size_max + 1))
 
 
 def ph_to_renewal_map(alpha, t_matrix):
@@ -299,8 +328,9 @@ def generate_example(args, example_id):
     )
 
     rho = float(rng.uniform(args.service_mean_min, args.service_mean_max))
+    service_size = choose_service_size(args, rng)
     service_alpha, service_t, service_scv = random_hyperexponential_ph(
-        args.service_size,
+        service_size,
         target_mean=rho,
         scv_min=args.service_scv_min,
         scv_max=args.service_scv_max,
@@ -320,6 +350,7 @@ def generate_example(args, example_id):
         "rho": rho,
         "arrival_mean": 1.0,
         "service_mean": ph_mean(service_alpha, service_t),
+        "service_size": int(service_size),
         "service_scv": service_scv,
         "map_lag1_autocorrelation": autocorr,
         "D0": d0.astype(float),
@@ -419,6 +450,12 @@ def main():
         raise ValueError("Require 0 < service mean min/max < 1")
     if args.service_mean_min > args.service_mean_max:
         raise ValueError("--service-mean-min must be <= --service-mean-max")
+    if args.service_size < 2:
+        raise ValueError("--service-size must be at least 2")
+    if args.service_size_min < 2:
+        raise ValueError("--service-size-min must be at least 2")
+    if args.service_size_min > args.service_size_max:
+        raise ValueError("--service-size-min must be <= --service-size-max")
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -437,6 +474,11 @@ def main():
     print("Global examples:", first_example, "to", first_example + args.num_examples - 1)
     print("Output dir:", output_dir)
     print("Service mean/rho range:", args.service_mean_min, args.service_mean_max)
+    if args.random_service_size:
+        print("Random service PH size range:", args.service_size_min, args.service_size_max)
+    else:
+        print("Fixed service PH size:", args.service_size)
+    print("Service SCV range:", args.service_scv_min, args.service_scv_max)
 
     rows = []
     start_all = time.perf_counter()
@@ -463,6 +505,7 @@ def main():
                 "path": str(output_path),
                 "rho": payload["rho"],
                 "service_mean": payload["service_mean"],
+                "service_size": payload["service_size"],
                 "service_scv": payload["service_scv"],
                 "map_lag1_autocorrelation": payload["map_lag1_autocorrelation"],
                 "sojourn_mean": payload["sojourn_mean"],
@@ -471,6 +514,8 @@ def main():
         )
         print(
             f"Saved example {example_id}: rho={payload['rho']:.4f}, "
+            f"service_size={payload['service_size']}, "
+            f"service_scv={payload['service_scv']:.4f}, "
             f"corr={payload['map_lag1_autocorrelation']:.4f}, "
             f"E[W]={payload['sojourn_mean']:.4g}, "
             f"time={time.perf_counter() - start:.3f}s"

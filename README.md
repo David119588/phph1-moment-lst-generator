@@ -77,14 +77,14 @@ metadata, and log moment arrays.
 ## Sample MAP/PH/1 second-queue sojourn data
 
 Use `sample_map_ph1_sojourn.py` when the second queue arrival process is a MAP.
-The script samples a 2-state MMPP/MAP arrival process, samples PH service times,
-and computes the MAP/PH/1 sojourn-time ME representation with BuTools
-`MAPMAP1`.
+The script samples a 2-state MMPP/MAP arrival process, samples diverse PH
+service times with PH size up to `100` and SCV up to `20`, and computes the
+MAP/PH/1 sojourn-time ME representation with BuTools `MAPMAP1`.
 
 Local/single-job example:
 
 ```bash
-python sample_map_ph1_sojourn.py --output-dir C:\map_ph1_queue2 --num-examples 1000 --service-mean-min 0.3 --service-mean-max 0.99
+python sample_map_ph1_sojourn.py --output-dir C:\map_ph1_queue2 --num-examples 1000 --service-mean-min 0.3 --service-mean-max 0.99 --random-service-size 1 --service-size-min 2 --service-size-max 100 --service-scv-max 20
 ```
 
 SLURM array example:
@@ -94,8 +94,9 @@ sbatch run_map_ph1_queue2_1000x1000.sbatch
 ```
 
 This submits `1000` array tasks with `1000` examples per task. The array limit
-`%100` means up to `100` tasks run in parallel. Outputs are written to
-`/scratch200/davidfine/map_ph1_queue2_data`.
+`%100` means up to `100` tasks run in parallel. Each example samples service PH
+size uniformly from `2` to `100`, service SCV up to `20`, and utilization in
+`[0.3, 0.99]`. Outputs are written to `/scratch200/davidfine/map_ph1_queue2_data`.
 
 The script saves PKLs, per-job manifest CSV files, and these graphs:
 
