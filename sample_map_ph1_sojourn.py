@@ -117,11 +117,12 @@ def parse_args():
     parser.add_argument("--map-switch-rate-max", type=float, default=3.0)
     parser.add_argument(
         "--map-corr-mode",
-        choices=("mixed", "positive", "negative"),
-        default="mixed",
+        choices=("near_zero", "mixed", "positive", "negative"),
+        default="near_zero",
         help=(
-            "MAP autocorrelation family. positive uses an MMPP-like MAP, "
-            "negative uses an alternating-arrival MAP, and mixed samples both."
+            "MAP autocorrelation family. near_zero samples a weakly correlated "
+            "2-state MAP, positive uses an MMPP-like MAP, negative uses an "
+            "alternating-arrival MAP, and mixed samples both positive and negative."
         ),
     )
     parser.add_argument(
@@ -160,7 +161,7 @@ def ph_moments(alpha, t_matrix, n_moms):
     moments = []
     for k in range(1, n_moms + 1):
         power = power @ inv_minus_t
-        moments.append(math.factorial(k) * float(alpha @ power @ ones))
+        moments.append(math.factorial(k) * (alpha @ power @ ones).item())
     return np.asarray(moments, dtype=float)
 
 
@@ -226,7 +227,7 @@ def stationary_distribution(q):
 def map_arrival_rate(d0, d1):
     q = d0 + d1
     pi = stationary_distribution(q)
-    return float(pi @ d1 @ col_ones(d0.shape[0]))
+    return (pi @ d1 @ col_ones(d0.shape[0])).item()
 
 
 def scale_map_to_mean(d0, d1, target_mean):
@@ -267,6 +268,36 @@ def sample_mMPP_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_max=20.
     return d0, d1, "positive_mmpp"
 
 
+def sample_near_zero_map(rng, target_mean=1.0):
+    """
+    Sample a weakly correlated 2-state MAP.
+
+    This is the default because the measured interdeparture autocorrelations in
+    the extracted queue data are close to zero. The two arrival rates are close
+    to each other and the hidden-state switching is fast, so lag-1 dependence is
+    small while the process is still represented as a MAP.
+    """
+    base_rate = float(np.exp(rng.uniform(np.log(0.8), np.log(1.25))))
+    rate_ratio = float(np.exp(rng.uniform(np.log(1.0), np.log(1.02))))
+    lambdas = np.array([base_rate, base_rate * rate_ratio], dtype=float)
+    if rng.random() < 0.5:
+        lambdas = lambdas[::-1]
+
+    q01 = float(np.exp(rng.uniform(np.log(30.0), np.log(100.0))))
+    q10 = float(np.exp(rng.uniform(np.log(30.0), np.log(100.0))))
+
+    d1 = np.diag(lambdas)
+    d0 = np.array(
+        [
+            [-(q01 + lambdas[0]), q01],
+            [q10, -(q10 + lambdas[1])],
+        ],
+        dtype=float,
+    )
+    d0, d1 = scale_map_to_mean(d0, d1, target_mean)
+    return d0, d1, "near_zero_map"
+
+
 def sample_alternating_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_max=20.0,
                            switch_rate_min=0.02, switch_rate_max=3.0):
     """
@@ -305,6 +336,9 @@ def sample_alternating_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_
 
 
 def sample_map_arrival(args, rng):
+    if args.map_corr_mode == "near_zero":
+        return sample_near_zero_map(rng, target_mean=1.0)
+
     if args.map_corr_mode == "positive":
         return sample_mMPP_map(
             rng,
@@ -354,12 +388,12 @@ def lag1_autocorrelation_from_map(d0, d1):
     p = inv_minus_d0 @ d1
     pi = stationary_distribution(p - np.eye(n))
     mean_by_phase = inv_minus_d0 @ col_ones(n)
-    mean = float(pi @ mean_by_phase)
+    mean = (pi @ mean_by_phase).item()
     centered = mean_by_phase - mean
-    var = float(pi @ (centered * centered))
+    var = (pi @ (centered * centered)).item()
     if var <= 0:
         return 0.0
-    cov = float(pi @ (centered * (p @ centered)))
+    cov = (pi @ (centered * (p @ centered))).item()
     return cov / var
 
 
@@ -488,8 +522,8 @@ def plot_summary(output_dir, rows):
     axes[0].set_xlabel("rho")
     axes[0].set_ylabel("count")
     axes[1].hist(corr, bins=40, color="#b3532f", edgecolor="white")
-    axes[1].set_title("MAP lag-1 autocorrelation")
-    axes[1].set_xlabel("autocorrelation")
+    axes[1].set_title("Arrival MAP lag-1 autocorrelation")
+    axes[1].set_xlabel("arrival MAP autocorrelation")
     axes[2].hist(np.log(soj_mean), bins=40, color="#585858", edgecolor="white")
     axes[2].set_title("Log sojourn mean")
     axes[2].set_xlabel("log E[W]")
@@ -505,7 +539,7 @@ def plot_summary(output_dir, rows):
     axis.set_xlabel("utilization rho")
     axis.set_ylabel("log sojourn mean")
     colorbar = fig.colorbar(scatter, ax=axis)
-    colorbar.set_label("MAP lag-1 autocorrelation")
+    colorbar.set_label("arrival MAP lag-1 autocorrelation")
     fig.tight_layout()
     path = output_dir / "map_ph1_sojourn_area.png"
     fig.savefig(path, dpi=180)
