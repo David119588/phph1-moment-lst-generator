@@ -117,12 +117,14 @@ def parse_args():
     parser.add_argument("--map-switch-rate-max", type=float, default=3.0)
     parser.add_argument(
         "--map-corr-mode",
-        choices=("near_zero", "mixed", "positive", "negative"),
-        default="near_zero",
+        choices=("near_zero_mixed", "near_zero", "mixed", "positive", "negative"),
+        default="near_zero_mixed",
         help=(
-            "MAP autocorrelation family. near_zero samples a weakly correlated "
-            "2-state MAP, positive uses an MMPP-like MAP, negative uses an "
-            "alternating-arrival MAP, and mixed samples both positive and negative."
+            "MAP autocorrelation family. near_zero_mixed samples weak positive "
+            "and weak negative autocorrelation around zero, near_zero samples a "
+            "weak positive 2-state MAP, positive uses an MMPP-like MAP, negative "
+            "uses an alternating-arrival MAP, and mixed samples broad positive "
+            "and negative autocorrelation."
         ),
     )
     parser.add_argument(
@@ -298,6 +300,36 @@ def sample_near_zero_map(rng, target_mean=1.0):
     return d0, d1, "near_zero_map"
 
 
+def sample_near_zero_negative_map(rng, target_mean=1.0):
+    """
+    Sample a weak alternating MAP with small negative lag-1 autocorrelation.
+    """
+    base_rate = float(np.exp(rng.uniform(np.log(0.8), np.log(1.25))))
+    rate_ratio = float(np.exp(rng.uniform(np.log(1.0), np.log(1.02))))
+    high_rate = base_rate * rate_ratio
+    low_rate = base_rate
+
+    arrival_switch_01 = high_rate
+    arrival_switch_10 = low_rate
+    no_arrival_switch_01 = float(np.exp(rng.uniform(np.log(30.0), np.log(100.0))))
+    no_arrival_switch_10 = float(np.exp(rng.uniform(np.log(30.0), np.log(100.0))))
+
+    if rng.random() < 0.5:
+        d1 = np.array([[0.0, arrival_switch_01], [arrival_switch_10, 0.0]], dtype=float)
+    else:
+        d1 = np.array([[0.0, arrival_switch_10], [arrival_switch_01, 0.0]], dtype=float)
+
+    d0 = np.array(
+        [
+            [-(no_arrival_switch_01 + d1[0].sum()), no_arrival_switch_01],
+            [no_arrival_switch_10, -(no_arrival_switch_10 + d1[1].sum())],
+        ],
+        dtype=float,
+    )
+    d0, d1 = scale_map_to_mean(d0, d1, target_mean)
+    return d0, d1, "near_zero_negative_map"
+
+
 def sample_alternating_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_max=20.0,
                            switch_rate_min=0.02, switch_rate_max=3.0):
     """
@@ -336,6 +368,11 @@ def sample_alternating_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_
 
 
 def sample_map_arrival(args, rng):
+    if args.map_corr_mode == "near_zero_mixed":
+        if rng.random() < 0.5:
+            return sample_near_zero_negative_map(rng, target_mean=1.0)
+        return sample_near_zero_map(rng, target_mean=1.0)
+
     if args.map_corr_mode == "near_zero":
         return sample_near_zero_map(rng, target_mean=1.0)
 
@@ -518,14 +555,14 @@ def plot_summary(output_dir, rows):
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     axes[0].hist(rho, bins=40, color="#28666e", edgecolor="white")
-    axes[0].set_title("Sampled utilization")
+    axes[0].set_title("Sampled utilization across models")
     axes[0].set_xlabel("rho")
     axes[0].set_ylabel("count")
     axes[1].hist(corr, bins=40, color="#b3532f", edgecolor="white")
-    axes[1].set_title("Arrival MAP lag-1 autocorrelation")
+    axes[1].set_title("Sampled arrival MAP lag-1 autocorrelation")
     axes[1].set_xlabel("arrival MAP autocorrelation")
     axes[2].hist(np.log(soj_mean), bins=40, color="#585858", edgecolor="white")
-    axes[2].set_title("Log sojourn mean")
+    axes[2].set_title("Log sojourn mean across models")
     axes[2].set_xlabel("log E[W]")
     fig.tight_layout()
     path = output_dir / "map_ph1_histograms.png"

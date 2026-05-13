@@ -77,16 +77,16 @@ metadata, and log moment arrays.
 ## Sample MAP/PH/1 second-queue sojourn data
 
 Use `sample_map_ph1_sojourn.py` when the second queue arrival process is a MAP.
-The default sampler uses weakly correlated 2-state MAP arrivals so the arrival
-MAP autocorrelation stays close to the measured interdeparture autocorrelation
-range. It also samples diverse PH service times with PH size up to `100` and
-SCV up to `20`, then computes the MAP/PH/1 sojourn-time ME representation with
-BuTools `MAPMAP1`.
+The default sampler uses weakly correlated 2-state MAP arrivals with small
+positive and small negative autocorrelation around zero, matching the measured
+interdeparture autocorrelation range. It also samples diverse PH service times
+with PH size up to `100` and SCV up to `20`, then computes the MAP/PH/1
+sojourn-time ME representation with BuTools `MAPMAP1`.
 
 Local/single-job example:
 
 ```bash
-python sample_map_ph1_sojourn.py --output-dir C:\map_ph1_queue2 --num-examples 1000 --service-mean-min 0.3 --service-mean-max 0.99 --random-service-size 1 --service-size-min 2 --service-size-max 100 --service-scv-max 20 --map-corr-mode near_zero
+python sample_map_ph1_sojourn.py --output-dir C:\map_ph1_queue2 --num-examples 1000 --service-mean-min 0.3 --service-mean-max 0.99 --random-service-size 1 --service-size-min 2 --service-size-max 100 --service-scv-max 20 --map-corr-mode near_zero_mixed
 ```
 
 SLURM array example:
@@ -98,8 +98,8 @@ sbatch run_map_ph1_queue2_1000x1000.sbatch
 This submits `1000` array tasks with `1000` examples per task. The array limit
 `%100` means up to `100` tasks run in parallel. Each example samples service PH
 size uniformly from `2` to `100`, service SCV up to `20`, and utilization in
-`[0.3, 0.99]`. The MAP sampler defaults to near-zero autocorrelation. Outputs
-are written to `/scratch200/davidfine/map_ph1_queue2_data`.
+`[0.3, 0.99]`. The MAP sampler defaults to near-zero mixed autocorrelation.
+Outputs are written to `/scratch200/davidfine/map_ph1_queue2_data`.
 
 The script saves PKLs, per-job manifest CSV files, and these graphs:
 
