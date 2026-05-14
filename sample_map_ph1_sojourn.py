@@ -280,13 +280,13 @@ def sample_near_zero_map(rng, target_mean=1.0):
     small while the process is still represented as a MAP.
     """
     base_rate = float(np.exp(rng.uniform(np.log(0.8), np.log(1.25))))
-    rate_ratio = float(np.exp(rng.uniform(np.log(1.0), np.log(1.02))))
+    rate_ratio = float(np.exp(rng.uniform(np.log(1.0), np.log(1.003))))
     lambdas = np.array([base_rate, base_rate * rate_ratio], dtype=float)
     if rng.random() < 0.5:
         lambdas = lambdas[::-1]
 
-    q01 = float(np.exp(rng.uniform(np.log(30.0), np.log(100.0))))
-    q10 = float(np.exp(rng.uniform(np.log(30.0), np.log(100.0))))
+    q01 = float(np.exp(rng.uniform(np.log(100.0), np.log(500.0))))
+    q10 = float(np.exp(rng.uniform(np.log(100.0), np.log(500.0))))
 
     d1 = np.diag(lambdas)
     d0 = np.array(
@@ -300,19 +300,42 @@ def sample_near_zero_map(rng, target_mean=1.0):
     return d0, d1, "near_zero_map"
 
 
+def sample_zero_corr_map(rng, target_mean=1.0):
+    """
+    Sample a MAP representation of an almost Poisson arrival process.
+
+    The two hidden states have the same arrival rate. This fills the region
+    around autocorrelation zero instead of creating two separated clusters.
+    """
+    arrival_rate = float(np.exp(rng.uniform(np.log(0.8), np.log(1.25))))
+    q01 = float(np.exp(rng.uniform(np.log(20.0), np.log(200.0))))
+    q10 = float(np.exp(rng.uniform(np.log(20.0), np.log(200.0))))
+
+    d1 = np.diag([arrival_rate, arrival_rate])
+    d0 = np.array(
+        [
+            [-(q01 + arrival_rate), q01],
+            [q10, -(q10 + arrival_rate)],
+        ],
+        dtype=float,
+    )
+    d0, d1 = scale_map_to_mean(d0, d1, target_mean)
+    return d0, d1, "zero_corr_map"
+
+
 def sample_near_zero_negative_map(rng, target_mean=1.0):
     """
     Sample a weak alternating MAP with small negative lag-1 autocorrelation.
     """
     base_rate = float(np.exp(rng.uniform(np.log(0.8), np.log(1.25))))
-    rate_ratio = float(np.exp(rng.uniform(np.log(1.0), np.log(1.02))))
+    rate_ratio = float(np.exp(rng.uniform(np.log(1.0), np.log(1.003))))
     high_rate = base_rate * rate_ratio
     low_rate = base_rate
 
     arrival_switch_01 = high_rate
     arrival_switch_10 = low_rate
-    no_arrival_switch_01 = float(np.exp(rng.uniform(np.log(30.0), np.log(100.0))))
-    no_arrival_switch_10 = float(np.exp(rng.uniform(np.log(30.0), np.log(100.0))))
+    no_arrival_switch_01 = float(np.exp(rng.uniform(np.log(100.0), np.log(500.0))))
+    no_arrival_switch_10 = float(np.exp(rng.uniform(np.log(100.0), np.log(500.0))))
 
     if rng.random() < 0.5:
         d1 = np.array([[0.0, arrival_switch_01], [arrival_switch_10, 0.0]], dtype=float)
@@ -369,7 +392,10 @@ def sample_alternating_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_
 
 def sample_map_arrival(args, rng):
     if args.map_corr_mode == "near_zero_mixed":
-        if rng.random() < 0.5:
+        draw = rng.random()
+        if draw < 0.34:
+            return sample_zero_corr_map(rng, target_mean=1.0)
+        if draw < 0.67:
             return sample_near_zero_negative_map(rng, target_mean=1.0)
         return sample_near_zero_map(rng, target_mean=1.0)
 
@@ -428,7 +454,7 @@ def lag1_autocorrelation_from_map(d0, d1):
     mean = (pi @ mean_by_phase).item()
     centered = mean_by_phase - mean
     var = (pi @ (centered * centered)).item()
-    if var <= 0:
+    if var <= 1e-12:
         return 0.0
     cov = (pi @ (centered * (p @ centered))).item()
     return cov / var
