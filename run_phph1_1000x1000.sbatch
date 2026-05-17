@@ -40,4 +40,4 @@ python -u generate_phph1_sojourn_moments.py \
   --random-service-mean 1 \
   --service-mean-min 0.3 \
   --service-mean-max 0.99 \
-  --payload-format dict
+  --payload-format tuple
