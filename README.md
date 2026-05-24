@@ -107,6 +107,32 @@ The script saves PKLs, per-job manifest CSV files, and these graphs:
 - `map_ph1_sojourn_area.png`
 - `map_ph1_service_scv_vs_sojourn.png`
 
+## MAP/PH/1 LST moment-budget experiment
+
+This experiment answers how many moments are needed to reconstruct the
+MAP/PH/1 sojourn-time LST in the second queue. It samples `1000` MAP/PH/1
+queues, with MAP size up to `100` and PH service size up to `100`, then fits
+from odd moments `K = 1, 3, ..., 15`.
+
+On SLURM, run the parallel chunks:
+
+```bash
+cd /scratch200/davidfine/phph1
+sbatch run_map_ph1_lst_budget_100x10.sbatch
+```
+
+After all array tasks finish, combine the chunks and draw the final mean-only
+L2 graph:
+
+```bash
+python aggregate_map_ph1_lst_slurm.py --root-dir /scratch200/davidfine/map_ph1_lst_moment_budget_1000
+```
+
+Final outputs:
+
+- `/scratch200/davidfine/map_ph1_lst_moment_budget_1000/map_ph1_lst_l2_summary_by_K.csv`
+- `/scratch200/davidfine/map_ph1_lst_moment_budget_1000/map_ph1_lst_mean_l2_vs_odd_moments_up_to_15.png`
+
 ## Plot SCV and PH-size graphs
 
 ```bash

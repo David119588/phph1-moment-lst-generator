@@ -128,6 +128,24 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--map-corr-min",
+        type=float,
+        default=-0.02,
+        help=(
+            "Lower target lag-1 autocorrelation for --map-corr-mode near_zero_mixed. "
+            "Default is based on the central empirical interdeparture range."
+        ),
+    )
+    parser.add_argument(
+        "--map-corr-max",
+        type=float,
+        default=0.035,
+        help=(
+            "Upper target lag-1 autocorrelation for --map-corr-mode near_zero_mixed. "
+            "Default is based on the central empirical interdeparture range."
+        ),
+    )
+    parser.add_argument(
         "--map-negative-prob",
         type=float,
         default=0.5,
@@ -135,6 +153,12 @@ def parse_args():
     )
     parser.add_argument("--num-moments", type=int, default=20)
     parser.add_argument("--plot", type=int, default=1)
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=1,
+        help="Print one progress line every N generated examples.",
+    )
     return parser.parse_args()
 
 
@@ -390,14 +414,92 @@ def sample_alternating_map(rng, target_mean=1.0, rate_ratio_min=1.5, rate_ratio_
     return d0, d1, "negative_alternating"
 
 
+def sample_continuous_near_zero_map(rng, target_mean=1.0, corr_min=-0.015, corr_max=0.015):
+    """
+    Sample a weakly correlated MAP with lag-1 autocorrelation spread around zero.
+
+    We first draw a target autocorrelation uniformly in the requested interval.
+    Then we generate candidate positive or negative 2-state MAPs and keep the
+    candidate whose measured lag-1 autocorrelation is closest to that target.
+    This avoids the artificial spike that happens when many examples are forced
+    to be exactly zero-correlation MAPs.
+    """
+    target_corr = float(rng.uniform(corr_min, corr_max))
+    prefer_negative = target_corr < 0.0
+    best = None
+    best_error = float("inf")
+
+    for _ in range(500):
+        target_abs = abs(target_corr)
+        if target_abs > 0.05:
+            rate_ratio_min = float(np.exp(rng.uniform(np.log(1.5), np.log(10.0))))
+            rate_ratio_max = float(np.exp(rng.uniform(np.log(rate_ratio_min), np.log(80.0))))
+            switch_rate_min = float(np.exp(rng.uniform(np.log(0.001), np.log(0.5))))
+            switch_rate_max = float(np.exp(rng.uniform(np.log(switch_rate_min), np.log(5.0))))
+        elif target_abs > 0.02:
+            rate_ratio_min = float(np.exp(rng.uniform(np.log(1.05), np.log(3.0))))
+            rate_ratio_max = float(np.exp(rng.uniform(np.log(rate_ratio_min), np.log(20.0))))
+            switch_rate_min = float(np.exp(rng.uniform(np.log(0.01), np.log(2.0))))
+            switch_rate_max = float(np.exp(rng.uniform(np.log(switch_rate_min), np.log(50.0))))
+        else:
+            rate_ratio_min = float(np.exp(rng.uniform(np.log(1.001), np.log(1.03))))
+            rate_ratio_max = float(np.exp(rng.uniform(np.log(rate_ratio_min), np.log(1.35))))
+            switch_rate_min = float(np.exp(rng.uniform(np.log(5.0), np.log(80.0))))
+            switch_rate_max = float(np.exp(rng.uniform(np.log(switch_rate_min), np.log(600.0))))
+
+        if prefer_negative:
+            d0, d1, base_kind = sample_alternating_map(
+                rng,
+                target_mean=target_mean,
+                rate_ratio_min=rate_ratio_min,
+                rate_ratio_max=rate_ratio_max,
+                switch_rate_min=switch_rate_min,
+                switch_rate_max=switch_rate_max,
+            )
+        else:
+            d0, d1, base_kind = sample_mMPP_map(
+                rng,
+                target_mean=target_mean,
+                rate_ratio_min=rate_ratio_min,
+                rate_ratio_max=rate_ratio_max,
+                switch_rate_min=switch_rate_min,
+                switch_rate_max=switch_rate_max,
+            )
+
+        corr = float(lag1_autocorrelation_from_map(d0, d1))
+        if not np.isfinite(corr):
+            continue
+        if prefer_negative and corr > 0.001:
+            continue
+        if not prefer_negative and corr < -0.001:
+            continue
+        if corr < corr_min or corr > corr_max:
+            continue
+
+        error = abs(corr - target_corr)
+        if error < best_error:
+            best = (d0, d1, f"continuous_near_zero_{base_kind}")
+            best_error = error
+        tolerance = max(0.00025, 0.02 * max(abs(target_corr), 0.001))
+        if best_error <= tolerance:
+            break
+
+    if best is not None:
+        return best
+
+    if prefer_negative:
+        return sample_near_zero_negative_map(rng, target_mean=target_mean)
+    return sample_near_zero_map(rng, target_mean=target_mean)
+
+
 def sample_map_arrival(args, rng):
     if args.map_corr_mode == "near_zero_mixed":
-        draw = rng.random()
-        if draw < 0.34:
-            return sample_zero_corr_map(rng, target_mean=1.0)
-        if draw < 0.67:
-            return sample_near_zero_negative_map(rng, target_mean=1.0)
-        return sample_near_zero_map(rng, target_mean=1.0)
+        return sample_continuous_near_zero_map(
+            rng,
+            target_mean=1.0,
+            corr_min=args.map_corr_min,
+            corr_max=args.map_corr_max,
+        )
 
     if args.map_corr_mode == "near_zero":
         return sample_near_zero_map(rng, target_mean=1.0)
@@ -640,8 +742,14 @@ def main():
         raise ValueError("--service-size-min must be at least 2")
     if args.service_size_min > args.service_size_max:
         raise ValueError("--service-size-min must be <= --service-size-max")
+    if args.map_corr_min >= args.map_corr_max:
+        raise ValueError("--map-corr-min must be smaller than --map-corr-max")
+    if args.map_corr_min < -1.0 or args.map_corr_max > 1.0:
+        raise ValueError("MAP autocorrelation targets must stay inside [-1, 1]")
     if args.map_negative_prob < 0.0 or args.map_negative_prob > 1.0:
         raise ValueError("--map-negative-prob must be between 0 and 1")
+    if args.progress_every < 1:
+        raise ValueError("--progress-every must be at least 1")
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -701,15 +809,15 @@ def main():
                 "sojourn_order": payload["sojourn_order"],
             }
         )
-        print(
-            f"Saved example {example_id}: rho={payload['rho']:.4f}, "
-            f"service_size={payload['service_size']}, "
-            f"service_scv={payload['service_scv']:.4f}, "
-            f"map_type={payload['map_type']}, "
-            f"corr={payload['map_lag1_autocorrelation']:.4f}, "
-            f"E[W]={payload['sojourn_mean']:.4g}, "
-            f"time={time.perf_counter() - start:.3f}s"
-        )
+        if (local_id + 1) % args.progress_every == 0 or local_id + 1 == args.num_examples:
+            elapsed = time.perf_counter() - start_all
+            print(
+                f"Saved {local_id + 1}/{args.num_examples} examples "
+                f"(latest id {example_id}): rho={payload['rho']:.4f}, "
+                f"corr={payload['map_lag1_autocorrelation']:.4f}, "
+                f"E[W]={payload['sojourn_mean']:.4g}, "
+                f"elapsed={elapsed:.1f}s"
+            )
 
     suffix = f"_job_{job_index:04d}_ex_{first_example:08d}_{first_example + args.num_examples - 1:08d}"
     manifest_path = write_manifest(output_dir, rows, suffix)
