@@ -215,6 +215,29 @@ Each system writes two PKLs:
 Each PKL contains `interdeparture_times`, retained departure timestamps, station
 ID, PH family/size metadata, SCVs, service utilizations, and simulation settings.
 
+## Fit MAPs from tandem departure traces
+
+Use `fit_map_from_departure_trace_sample.py` to call BuTools `MAPFromTrace` on
+the retained inter-departure traces. The script can fit station 1 and station 2
+separately from the same tandem PKL folder.
+
+Station 1 sample:
+
+```bash
+sbatch run_map_from_tandem_station1_sample.sbatch
+```
+
+Station 2 sample:
+
+```bash
+sbatch run_map_from_tandem_station2_sample.sbatch
+```
+
+Both launchers fit `20` randomly selected PKLs with MAP order `5`, using up to
+the full `95000` retained observations per trace. Outputs include fitted
+`D0,D1` PKLs, `map_from_trace_fit_summary.csv`, failures CSV, and a descriptor
+diagnostic plot.
+
 ## Check outputs
 
 ```bash
