@@ -187,6 +187,34 @@ and plots comparing the two queues:
 - `moment_autocorrelation_area.png`
 - `moment_area_m2_m3.png`
 
+## Simulate two-station tandem departure traces
+
+Use `simulate_tandem_ph_departures.py` to simulate two FCFS stations in tandem.
+The external interarrival PH has mean `1`, and each station service mean is
+sampled uniformly from the requested utilization interval. With the defaults,
+each system simulates `100000` departures, discards the first `5000`, and saves
+`95000` inter-departure observations per station.
+
+Local one-system validation run:
+
+```bash
+python simulate_tandem_ph_departures.py --num-systems 1 --output-dir C:\tandem_departure_pkls
+```
+
+Full SLURM array run for `1000` systems:
+
+```bash
+sbatch run_tandem_ph_departures_1000.sbatch
+```
+
+Each system writes two PKLs:
+
+- `tandem_XXXXXX_station1_interdepartures.pkl`
+- `tandem_XXXXXX_station2_interdepartures.pkl`
+
+Each PKL contains `interdeparture_times`, retained departure timestamps, station
+ID, PH family/size metadata, SCVs, service utilizations, and simulation settings.
+
 ## Check outputs
 
 ```bash
