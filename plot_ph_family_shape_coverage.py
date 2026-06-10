@@ -1,8 +1,9 @@
 """
-Sample PH distributions from three families and plot shape coverage.
+Sample PH/PH/1 first-station input distributions and plot shape coverage.
 
-The output figure matches the first-station distributional coverage diagnostic:
-SCV vs skewness and SCV vs kurtosis, colored by PH family.
+Each example contains one arrival PH with mean 1 and one service PH with mean
+sampled uniformly from the requested service-mean interval. Both distributions
+are accepted only when their SCV is in the requested interval.
 """
 
 import argparse
@@ -23,7 +24,7 @@ from sample_ph_family_histograms import scale_ph_to_mean
 FAMILY_LABELS = {
     "hyper_erlang": "Hyper Erlang",
     "coxian": "Coxian",
-    "general": "General",
+    "hyper_general": "Hyper General",
 }
 
 
@@ -31,14 +32,21 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Plot SCV/skewness/kurtosis coverage for sampled PH families."
     )
-    parser.add_argument("--ph-size", type=int, default=100)
-    parser.add_argument("--per-family", type=int, default=1000)
+    parser.add_argument("--num-examples", type=int, default=1000)
+    parser.add_argument("--ph-size-min", type=int, default=2)
+    parser.add_argument("--ph-size-max", type=int, default=100)
+    parser.add_argument("--arrival-mean", type=float, default=1.0)
+    parser.add_argument("--service-mean-min", type=float, default=0.5)
+    parser.add_argument("--service-mean-max", type=float, default=0.95)
+    parser.add_argument("--scv-min", type=float, default=0.0)
+    parser.add_argument("--scv-max-accepted", type=float, default=20.0)
+    parser.add_argument("--max-attempts", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=20260610)
     parser.add_argument(
         "--families",
         type=str,
-        default="hyper_erlang,coxian,general",
-        help="Comma-separated families from: hyper_erlang, coxian, general.",
+        default="hyper_erlang,coxian,hyper_general",
+        help="Comma-separated families from: hyper_erlang, coxian, hyper_general.",
     )
     parser.add_argument(
         "--output-dir",
@@ -61,7 +69,7 @@ def parse_args():
     parser.add_argument(
         "--scv-max",
         type=float,
-        default=150.0,
+        default=20.0,
         help="X-axis cap for both panels. Use <=0 for automatic.",
     )
     return parser.parse_args()
@@ -151,7 +159,7 @@ def random_coxian_shape_ph(n, rng):
     return scale_ph_to_mean(alpha, t_matrix, target_mean=1.0)
 
 
-def random_general_shape_ph(n, rng):
+def random_general_block_ph(n, rng):
     alpha = rng.dirichlet(np.full(n, 0.08)).reshape(1, n)
     rates = np.exp(rng.uniform(np.log(0.0005), np.log(500.0), size=n))
     t_matrix = np.zeros((n, n))
@@ -168,48 +176,85 @@ def random_general_shape_ph(n, rng):
     return scale_ph_to_mean(alpha, t_matrix, target_mean=1.0)
 
 
+def random_hyper_general_shape_ph(n, rng):
+    branch_count = int(rng.integers(2, min(12, n) + 1))
+    sizes = random_composition(n, branch_count, rng)
+    weights = rng.dirichlet(np.full(branch_count, 0.2))
+
+    alpha = np.zeros((1, n))
+    t_matrix = np.zeros((n, n))
+    offset = 0
+
+    for branch_idx, branch_size in enumerate(sizes):
+        branch_alpha, branch_t = random_general_block_ph(branch_size, rng)
+        alpha[0, offset : offset + branch_size] = weights[branch_idx] * branch_alpha
+        t_matrix[offset : offset + branch_size, offset : offset + branch_size] = branch_t
+        offset += branch_size
+
+    return scale_ph_to_mean(alpha, t_matrix, target_mean=1.0)
+
+
 def random_ph_by_family(family, n, rng):
     if family == "hyper_erlang":
         return random_hyper_erlang_shape_ph(n, rng)
     if family == "coxian":
         return random_coxian_shape_ph(n, rng)
-    if family == "general":
-        return random_general_shape_ph(n, rng)
+    if family == "hyper_general":
+        return random_hyper_general_shape_ph(n, rng)
     raise ValueError(f"Unknown family: {family}")
 
 
-def sample_rows(families, ph_size, per_family, seed):
-    rng = np.random.default_rng(seed)
+def sample_one_ph(family, ph_size, target_mean, scv_min, scv_max, max_attempts, rng):
+    for attempt in range(1, max_attempts + 1):
+        alpha, t_matrix = random_ph_by_family(family, ph_size, rng)
+        alpha, t_matrix = scale_ph_to_mean(alpha, t_matrix, target_mean=target_mean)
+        metrics = ph_shape_metrics(alpha, t_matrix)
+        if metrics is None:
+            continue
+        if scv_min <= metrics["scv"] <= scv_max:
+            return attempt, metrics
+
+    raise RuntimeError(
+        f"Could not sample {family} PH with size={ph_size}, mean={target_mean:.6g}, "
+        f"and SCV in [{scv_min:.6g}, {scv_max:.6g}] after {max_attempts} attempts."
+    )
+
+
+def sample_rows(args, families):
+    rng = np.random.default_rng(args.seed)
     rows = []
 
-    for family in families:
-        accepted = 0
-        attempts = 0
-        max_attempts = per_family * 20
+    for example_id in range(args.num_examples):
+        arrival_family = families[example_id % len(families)]
+        service_family = families[(example_id + 1) % len(families)]
+        arrival_size = int(rng.integers(args.ph_size_min, args.ph_size_max + 1))
+        service_size = int(rng.integers(args.ph_size_min, args.ph_size_max + 1))
+        service_mean = float(rng.uniform(args.service_mean_min, args.service_mean_max))
 
-        while accepted < per_family and attempts < max_attempts:
-            attempts += 1
-            alpha, t_matrix = random_ph_by_family(family, ph_size, rng)
-            metrics = ph_shape_metrics(alpha, t_matrix)
-            if metrics is None:
-                continue
-
+        for role, family, ph_size, target_mean in [
+            ("arrival", arrival_family, arrival_size, args.arrival_mean),
+            ("service", service_family, service_size, service_mean),
+        ]:
+            attempts, metrics = sample_one_ph(
+                family,
+                ph_size,
+                target_mean,
+                args.scv_min,
+                args.scv_max_accepted,
+                args.max_attempts,
+                rng,
+            )
             rows.append(
                 {
+                    "example_id": example_id,
+                    "role": role,
                     "family": family,
                     "family_label": FAMILY_LABELS.get(family, family),
-                    "sample_index": accepted,
                     "attempt": attempts,
                     "ph_size": ph_size,
+                    "target_mean": target_mean,
                     **metrics,
                 }
-            )
-            accepted += 1
-
-        if accepted < per_family:
-            raise RuntimeError(
-                f"Only accepted {accepted} finite {family} samples "
-                f"after {attempts} attempts."
             )
 
     return rows
@@ -218,11 +263,13 @@ def sample_rows(families, ph_size, per_family, seed):
 def write_rows(rows, output_dir):
     csv_path = output_dir / "ph_family_shape_coverage.csv"
     fieldnames = [
+        "example_id",
+        "role",
         "family",
         "family_label",
-        "sample_index",
         "attempt",
         "ph_size",
+        "target_mean",
         "mean",
         "scv",
         "skewness",
@@ -251,7 +298,7 @@ def plot_coverage(rows, families, output_dir, dpi, scv_max, skewness_y_max, kurt
     colors = {
         "hyper_erlang": "#2f74bc",
         "coxian": "#f28e2b",
-        "general": "#59a14f",
+        "hyper_general": "#59a14f",
     }
 
     for family in families:
@@ -325,6 +372,17 @@ def family_summary(rows, families):
 
 def main():
     args = parse_args()
+    if args.ph_size_min < 1 or args.ph_size_max < args.ph_size_min:
+        raise ValueError("Require 1 <= --ph-size-min <= --ph-size-max.")
+    if args.arrival_mean <= 0.0:
+        raise ValueError("--arrival-mean must be positive.")
+    if args.service_mean_min <= 0.0 or args.service_mean_max < args.service_mean_min:
+        raise ValueError("Require 0 < --service-mean-min <= --service-mean-max.")
+    if args.service_mean_max >= args.arrival_mean:
+        raise ValueError("--service-mean-max must be smaller than --arrival-mean.")
+    if args.scv_min < 0.0 or args.scv_max_accepted < args.scv_min:
+        raise ValueError("Require 0 <= --scv-min <= --scv-max-accepted.")
+
     families = [item.strip() for item in args.families.split(",") if item.strip()]
     unknown = sorted(set(families) - set(FAMILY_LABELS))
     if unknown:
@@ -332,7 +390,7 @@ def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = sample_rows(families, args.ph_size, args.per_family, args.seed)
+    rows = sample_rows(args, families)
     csv_path = write_rows(rows, args.output_dir)
     png_path = plot_coverage(
         rows,
