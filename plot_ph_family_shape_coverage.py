@@ -3,7 +3,8 @@ Sample PH/PH/1 first-station input distributions and plot shape coverage.
 
 Each example contains one arrival PH with mean 1 and one service PH with mean
 sampled uniformly from the requested service-mean interval. Both distributions
-are accepted only when their SCV is in the requested interval.
+are accepted only when their SCV is in the requested interval, unless the SCV
+upper bound is disabled.
 """
 
 import argparse
@@ -39,7 +40,12 @@ def parse_args():
     parser.add_argument("--service-mean-min", type=float, default=0.5)
     parser.add_argument("--service-mean-max", type=float, default=0.95)
     parser.add_argument("--scv-min", type=float, default=0.0)
-    parser.add_argument("--scv-max-accepted", type=float, default=20.0)
+    parser.add_argument(
+        "--scv-max-accepted",
+        type=float,
+        default=0.0,
+        help="Maximum accepted SCV. Use <=0 for no upper bound.",
+    )
     parser.add_argument("--max-attempts", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=20260610)
     parser.add_argument(
@@ -211,12 +217,13 @@ def sample_one_ph(family, ph_size, target_mean, scv_min, scv_max, max_attempts, 
         metrics = ph_shape_metrics(alpha, t_matrix)
         if metrics is None:
             continue
-        if scv_min <= metrics["scv"] <= scv_max:
+        if metrics["scv"] >= scv_min and (scv_max <= 0.0 or metrics["scv"] <= scv_max):
             return attempt, metrics
 
+    upper_text = "infinity" if scv_max <= 0.0 else f"{scv_max:.6g}"
     raise RuntimeError(
         f"Could not sample {family} PH with size={ph_size}, mean={target_mean:.6g}, "
-        f"and SCV in [{scv_min:.6g}, {scv_max:.6g}] after {max_attempts} attempts."
+        f"and SCV in [{scv_min:.6g}, {upper_text}] after {max_attempts} attempts."
     )
 
 
@@ -284,8 +291,8 @@ def write_rows(rows, output_dir):
     return csv_path
 
 
-def set_axis_limits(axis, x_max, y_max):
-    axis.set_xlim(left=0.0)
+def set_axis_limits(axis, x_max, y_max, x_min=0.0):
+    axis.set_xlim(left=x_min)
     axis.set_ylim(bottom=0.0)
     if x_max > 0.0:
         axis.set_xlim(right=x_max)
@@ -293,13 +300,27 @@ def set_axis_limits(axis, x_max, y_max):
         axis.set_ylim(top=y_max)
 
 
-def plot_coverage(rows, families, output_dir, dpi, scv_max, skewness_y_max, kurtosis_y_max):
+def plot_coverage(
+    rows,
+    families,
+    output_dir,
+    dpi,
+    scv_max,
+    skewness_y_max,
+    kurtosis_y_max,
+    *,
+    xscale="linear",
+    filename="ph_family_scv_skewness_kurtosis.png",
+):
     fig, axes = plt.subplots(1, 2, figsize=(14, 4.6))
     colors = {
         "hyper_erlang": "#2f74bc",
         "coxian": "#f28e2b",
         "hyper_general": "#59a14f",
     }
+
+    positive_scv = [row["scv"] for row in rows if row["scv"] > 0.0]
+    x_min = 0.8 * min(positive_scv) if xscale == "log" and positive_scv else 0.0
 
     for family in families:
         family_rows = [row for row in rows if row["family"] == family]
@@ -334,15 +355,14 @@ def plot_coverage(rows, families, output_dir, dpi, scv_max, skewness_y_max, kurt
     axes[1].set_xlabel("SCV", fontsize=12)
     axes[1].set_ylabel("Kurtosis", fontsize=12)
 
-    set_axis_limits(axes[0], scv_max, skewness_y_max)
-    set_axis_limits(axes[1], scv_max, kurtosis_y_max)
-
     for axis in axes:
+        axis.set_xscale(xscale)
+        set_axis_limits(axis, scv_max, skewness_y_max if axis is axes[0] else kurtosis_y_max, x_min)
         axis.legend(fontsize=8, frameon=True)
         axis.grid(False)
 
     fig.tight_layout(w_pad=4.5)
-    png_path = output_dir / "ph_family_scv_skewness_kurtosis.png"
+    png_path = output_dir / filename
     fig.savefig(png_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     return png_path
@@ -380,8 +400,10 @@ def main():
         raise ValueError("Require 0 < --service-mean-min <= --service-mean-max.")
     if args.service_mean_max >= args.arrival_mean:
         raise ValueError("--service-mean-max must be smaller than --arrival-mean.")
-    if args.scv_min < 0.0 or args.scv_max_accepted < args.scv_min:
-        raise ValueError("Require 0 <= --scv-min <= --scv-max-accepted.")
+    if args.scv_min < 0.0:
+        raise ValueError("--scv-min must be nonnegative.")
+    if 0.0 < args.scv_max_accepted < args.scv_min:
+        raise ValueError("Require --scv-max-accepted <= 0 or --scv-max-accepted >= --scv-min.")
 
     families = [item.strip() for item in args.families.split(",") if item.strip()]
     unknown = sorted(set(families) - set(FAMILY_LABELS))
@@ -401,9 +423,21 @@ def main():
         args.skewness_y_max,
         args.kurtosis_y_max,
     )
+    log_png_path = plot_coverage(
+        rows,
+        families,
+        args.output_dir,
+        args.dpi,
+        args.scv_max,
+        args.skewness_y_max,
+        args.kurtosis_y_max,
+        xscale="log",
+        filename="ph_family_scv_skewness_kurtosis_log_scv.png",
+    )
 
     print(f"Saved CSV: {csv_path}")
     print(f"Saved plot: {png_path}")
+    print(f"Saved log-SCV plot: {log_png_path}")
     print("Family,count,SCV min,SCV max,skewness min,skewness max,kurtosis min,kurtosis max")
     for line in family_summary(rows, families):
         print(
