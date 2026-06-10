@@ -20,6 +20,7 @@ import pickle
 import random
 import sys
 import tarfile
+import types
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +107,17 @@ def add_butools_paths() -> None:
 
 def load_butools():
     add_butools_paths()
+    if "IPython.display" not in sys.modules:
+        ipython_module = sys.modules.setdefault("IPython", types.ModuleType("IPython"))
+        display_module = types.ModuleType("IPython.display")
+
+        def clear_output(*args, **kwargs):
+            return None
+
+        display_module.clear_output = clear_output
+        ipython_module.display = display_module
+        sys.modules["IPython.display"] = display_module
+
     try:
         import butools
         from butools.fitting import MAPFromTrace
